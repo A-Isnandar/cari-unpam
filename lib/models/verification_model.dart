@@ -5,6 +5,7 @@ class VerificationModel {
   final String userId;
   final String userName;
   final String userPhotoUrl;
+  final String userStatus;
   final String teks;
   final String fotoUrl;
   final Timestamp createdAt;
@@ -14,6 +15,7 @@ class VerificationModel {
     required this.userId,
     required this.userName,
     required this.userPhotoUrl,
+    required this.userStatus,
     required this.teks,
     required this.fotoUrl,
     required this.createdAt,
@@ -26,6 +28,7 @@ class VerificationModel {
       userId: data['userId'] ?? '',
       userName: data['userName'] ?? '',
       userPhotoUrl: data['userPhotoUrl'] ?? '',
+      userStatus: data['userStatus'] ?? '',
       teks: data['teks'] ?? '',
       fotoUrl: data['fotoUrl'] ?? '',
       createdAt: data['createdAt'] ?? Timestamp.now(),
@@ -37,6 +40,7 @@ class VerificationModel {
       'userId': userId,
       'userName': userName,
       'userPhotoUrl': userPhotoUrl,
+      'userStatus': userStatus,
       'teks': teks,
       'fotoUrl': fotoUrl,
       'createdAt': createdAt,

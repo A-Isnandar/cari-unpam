@@ -5,6 +5,7 @@ class PostModel {
   final String userId;
   final String userName;
   final String userPhotoUrl;
+  final String userStatus;
 
   // Status: HILANG or DITEMUKAN
   final String statusKejadian;
@@ -44,6 +45,7 @@ class PostModel {
     required this.userId,
     required this.userName,
     required this.userPhotoUrl,
+    required this.userStatus,
     required this.statusKejadian,
     required this.jenisBarang,
     this.nim,
@@ -71,6 +73,7 @@ class PostModel {
       userId: data['userId'] ?? '',
       userName: data['userName'] ?? '',
       userPhotoUrl: data['userPhotoUrl'] ?? '',
+      userStatus: data['userStatus'] ?? '',
       statusKejadian: data['statusKejadian'] ?? 'HILANG',
       jenisBarang: data['jenisBarang'] ?? '',
       nim: data['nim'],
@@ -97,6 +100,7 @@ class PostModel {
       'userId': userId,
       'userName': userName,
       'userPhotoUrl': userPhotoUrl,
+      'userStatus': userStatus,
       'statusKejadian': statusKejadian,
       'jenisBarang': jenisBarang,
       'nim': nim,

@@ -1,13 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../models/post_model.dart';
 
 class PostService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instanceFor(
-      bucket: 'gs://cariunpam-d19b7.appspot.com');
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// Stream of active posts ordered by creation date
@@ -26,6 +24,30 @@ class PostService {
         .collection('posts')
         .where('userId', isEqualTo: uid)
         .snapshots();
+  }
+
+  /// Get a single post by ID
+  Future<PostModel?> getPostById(String postId) async {
+    try {
+      final doc = await _firestore.collection('posts').doc(postId).get();
+      if (doc.exists) {
+        return PostModel.fromFirestore(doc);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Get user profile by userId
+  Future<Map<String, dynamic>?> getUserProfile(String userId) async {
+    try {
+      final doc = await _firestore.collection('users').doc(userId).get();
+      if (doc.exists) return doc.data();
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
 
   /// Upload image to ImgBB
@@ -61,7 +83,7 @@ class PostService {
     final user = _auth.currentUser;
     if (user == null) throw Exception('User not logged in');
 
-    // Get user profile for name
+    // Get user profile for name and status
     final userDoc = await _firestore.collection('users').doc(user.uid).get();
     final userData = userDoc.data();
 
@@ -75,6 +97,7 @@ class PostService {
       'userId': user.uid,
       'userName': userData?['namaLengkap'] ?? 'Anonim',
       'userPhotoUrl': user.photoURL ?? '',
+      'userStatus': userData?['status'] ?? '',
       'expireAt': expireAt,
       'statusPost': 'AKTIF',
       'createdAt': FieldValue.serverTimestamp(),
@@ -118,6 +141,7 @@ class PostService {
       await _firestore.collection('notifications').add({
         'userId': targetUserId,
         'postId': doc.id,
+        'type': 'smart_match',
         'message':
             'Ada yang ${oppositeStatus == "HILANG" ? "kehilangan" : "menemukan"} barang dengan ciri-ciri mirip milikmu! (NIM: $nim)',
         'read': false,
@@ -150,21 +174,45 @@ class PostService {
     await batch.commit();
   }
 
-  /// Add verification to a post
+  /// Add verification to a post and notify post owner
   Future<void> addVerification(String postId, Map<String, dynamic> data) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('User not logged in');
     
     final userDoc = await _firestore.collection('users').doc(user.uid).get();
     final userData = userDoc.data();
+    final userName = userData?['namaLengkap'] ?? 'Anonim';
+    final userStatus = userData?['status'] ?? '';
 
     await _firestore.collection('posts').doc(postId).collection('verifications').add({
       ...data,
       'userId': user.uid,
-      'userName': userData?['namaLengkap'] ?? 'Anonim',
+      'userName': userName,
       'userPhotoUrl': user.photoURL ?? '',
+      'userStatus': userStatus,
       'createdAt': FieldValue.serverTimestamp(),
     });
+
+    // Send notification to post owner
+    final postDoc = await _firestore.collection('posts').doc(postId).get();
+    if (postDoc.exists) {
+      final postData = postDoc.data()!;
+      final postOwnerId = postData['userId'] as String;
+      final postTitle = postData['namaBarang'] as String? ?? 'postingan';
+
+      // Don't notify yourself
+      if (postOwnerId != user.uid) {
+        await _firestore.collection('notifications').add({
+          'userId': postOwnerId,
+          'postId': postId,
+          'type': 'verification_reply',
+          'senderName': userName,
+          'message': '$userName membalas postingan "$postTitle" dengan bukti verifikasi.',
+          'read': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
   }
 
   /// Delete verification
@@ -172,7 +220,7 @@ class PostService {
     await _firestore.collection('posts').doc(postId).collection('verifications').doc(verificationId).delete();
   }
 
-  /// Get notifications for current user
+  /// Get notifications for current user (ordered by newest first)
   Stream<QuerySnapshot> getNotificationsStream() {
     final uid = _auth.currentUser?.uid;
     if (uid == null) return const Stream.empty();
@@ -180,6 +228,19 @@ class PostService {
     return _firestore
         .collection('notifications')
         .where('userId', isEqualTo: uid)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
+  /// Get unread notification count stream
+  Stream<QuerySnapshot> getUnreadNotificationsStream() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return const Stream.empty();
+
+    return _firestore
+        .collection('notifications')
+        .where('userId', isEqualTo: uid)
+        .where('read', isEqualTo: false)
         .snapshots();
   }
 

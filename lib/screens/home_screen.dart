@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -8,7 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../models/post_model.dart';
 import '../models/verification_model.dart';
 import '../services/auth_service.dart';
-import 'dart:io';
+import '../services/notification_service.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/post_service.dart';
 
@@ -86,23 +88,79 @@ class _HomeScreenState extends State<HomeScreen>
   late AnimationController _fabAnimController;
   late Animation<double> _fabScaleAnim;
 
+  // Notification listener
+  StreamSubscription? _notifSubscription;
+  final Set<String> _knownNotifIds = {};
+  bool _initialNotifLoadDone = false;
+
+  late Stream<QuerySnapshot> _postsStream;
+  late Stream<QuerySnapshot> _notificationsStream;
+  late Stream<QuerySnapshot> _myPostsStream;
+
   @override
   void initState() {
     super.initState();
     _fabAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 400),
+      duration: const Duration(milliseconds: 300),
     );
-    _fabScaleAnim = Tween<double>(begin: 0, end: 1).animate(
-      CurvedAnimation(parent: _fabAnimController, curve: Curves.elasticOut),
-    );
+    _fabScaleAnim = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(
+      parent: _fabAnimController,
+      curve: Curves.easeOutBack,
+    ));
+    _fabAnimController.forward();
+
+    _postsStream = _postService.getPostsStream();
+    _notificationsStream = _postService.getNotificationsStream();
+    _myPostsStream = _postService.getMyPostsStream();
+
     Future.delayed(const Duration(milliseconds: 500), () {
       if (mounted) _fabAnimController.forward();
+    });
+    _setupNotificationListener();
+    _setupNotificationTapHandler();
+  }
+
+  void _setupNotificationTapHandler() {
+    NotificationService.onNotificationTapped = (postId) async {
+      if (postId != null) {
+        final post = await _postService.getPostById(postId);
+        if (post != null && mounted) {
+          setState(() => _currentIndex = 0);
+          _showPostDetail(post);
+        }
+      }
+    };
+  }
+
+  void _setupNotificationListener() {
+    _notifSubscription = _postService.getUnreadNotificationsStream().listen((snapshot) {
+      if (!_initialNotifLoadDone) {
+        // First load — just record existing IDs, don't fire local notifs
+        for (final doc in snapshot.docs) {
+          _knownNotifIds.add(doc.id);
+        }
+        _initialNotifLoadDone = true;
+        return;
+      }
+      // Check for NEW notifications (not already known)
+      for (final doc in snapshot.docs) {
+        if (!_knownNotifIds.contains(doc.id)) {
+          _knownNotifIds.add(doc.id);
+          final data = doc.data() as Map<String, dynamic>;
+          NotificationService().showNotification(
+            title: 'CariUnpam 🔔',
+            body: data['message'] ?? 'Ada notifikasi baru',
+            postId: data['postId'] as String?,
+          );
+        }
+      }
     });
   }
 
   @override
   void dispose() {
+    _notifSubscription?.cancel();
     _fabAnimController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -162,7 +220,7 @@ class _HomeScreenState extends State<HomeScreen>
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildNavItem(0, Icons.home_rounded, 'Beranda'),
-              _buildNavItem(1, Icons.notifications_outlined, 'Notifikasi'),
+              _buildNavItemWithBadge(1, Icons.notifications_outlined, 'Notifikasi'),
               const SizedBox(width: 56), // Space for FAB
               _buildNavItem(2, Icons.person_outline_rounded, 'Profil'),
               _buildNavItem(3, Icons.help_outline_rounded, 'Bantuan'),
@@ -204,6 +262,223 @@ class _HomeScreenState extends State<HomeScreen>
                 color: isActive ? AppColors.primary : AppColors.textMuted,
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Nav Item with Badge (for Notifications) ──────────────────
+  Widget _buildNavItemWithBadge(int index, IconData icon, String label) {
+    final isActive = _currentIndex == index;
+    return InkWell(
+      onTap: () => setState(() => _currentIndex = index),
+      borderRadius: BorderRadius.circular(12),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive
+              ? AppColors.primary.withValues(alpha: 0.12)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  icon,
+                  color: isActive ? AppColors.primary : AppColors.textMuted,
+                  size: 24,
+                ),
+                StreamBuilder<QuerySnapshot>(
+                  stream: _postService.getUnreadNotificationsStream(),
+                  builder: (context, snapshot) {
+                    final count = snapshot.data?.docs.length ?? 0;
+                    if (count == 0) return const SizedBox.shrink();
+                    return Positioned(
+                      right: -8,
+                      top: -4,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: AppColors.error,
+                          shape: BoxShape.circle,
+                        ),
+                        constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                        child: Text(
+                          count > 9 ? '9+' : '$count',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                color: isActive ? AppColors.primary : AppColors.textMuted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── User Profile Bottom Sheet ────────────────────────────────
+  void _showUserProfile(String userId) async {
+    final profile = await _postService.getUserProfile(userId);
+    if (profile == null || !mounted) return;
+
+    final namaLengkap = profile['namaLengkap'] ?? 'Pengguna';
+    final status = profile['status'] ?? '';
+    final email = profile['email'] ?? '';
+    final nomorWa = profile['nomorWa'] ?? '';
+    final photoUrl = profile['photoUrl'] as String?;
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.textMuted,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Profile photo
+            CircleAvatar(
+              radius: 44,
+              backgroundColor: AppColors.primary,
+              backgroundImage: photoUrl != null && photoUrl.isNotEmpty
+                  ? NetworkImage(photoUrl)
+                  : null,
+              child: (photoUrl == null || photoUrl.isEmpty)
+                  ? Text(
+                      namaLengkap.isNotEmpty ? namaLengkap[0].toUpperCase() : '?',
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.white,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(height: 16),
+
+            // Name
+            Text(
+              namaLengkap,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 6),
+
+            // Status badge
+            if (status.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  status,
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 12),
+
+            // Email
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.email_outlined, size: 16, color: AppColors.textMuted),
+                const SizedBox(width: 6),
+                Text(
+                  email,
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // WhatsApp button
+            if (nomorWa.isNotEmpty)
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    String formattedNumber = nomorWa;
+                    if (formattedNumber.startsWith('0')) {
+                      formattedNumber = '62${formattedNumber.substring(1)}';
+                    }
+                    if (!formattedNumber.startsWith('62')) {
+                      formattedNumber = '62$formattedNumber';
+                    }
+                    final url = Uri.parse('https://wa.me/$formattedNumber');
+                    if (await canLaunchUrl(url)) {
+                      await launchUrl(url, mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF25D366),
+                    foregroundColor: AppColors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    elevation: 0,
+                  ),
+                  icon: const Icon(Icons.chat_rounded, size: 20),
+                  label: const Text(
+                    'Hubungi via WhatsApp',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
@@ -321,7 +596,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _buildPostsList() {
     return StreamBuilder<QuerySnapshot>(
-      stream: _postService.getPostsStream(),
+      stream: _postsStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const SliverFillRemaining(
@@ -812,56 +1087,75 @@ class _HomeScreenState extends State<HomeScreen>
               const SizedBox(height: 16),
 
               // Reporter info
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceLight.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 22,
-                      backgroundColor: AppColors.primary,
-                      backgroundImage: post.userPhotoUrl.isNotEmpty
-                          ? NetworkImage(post.userPhotoUrl)
-                          : null,
-                      child: post.userPhotoUrl.isEmpty
-                          ? Text(
-                              post.userName.isNotEmpty
-                                  ? post.userName[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(
-                                  color: AppColors.white,
-                                  fontWeight: FontWeight.w700))
-                          : null,
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            post.userName,
-                            style: const TextStyle(
-                              color: AppColors.textPrimary,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                          Text(
-                            'Diposting ${_timeAgo(post.createdAt.toDate())}',
-                            style: const TextStyle(
-                              color: AppColors.textMuted,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
+              GestureDetector(
+                onTap: () => _showUserProfile(post.userId),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: AppColors.primary,
+                        backgroundImage: post.userPhotoUrl.isNotEmpty
+                            ? NetworkImage(post.userPhotoUrl)
+                            : null,
+                        child: post.userPhotoUrl.isEmpty
+                            ? Text(
+                                post.userName.isNotEmpty
+                                    ? post.userName[0].toUpperCase()
+                                    : '?',
+                                style: const TextStyle(
+                                    color: AppColors.white,
+                                    fontWeight: FontWeight.w700))
+                            : null,
                       ),
-                    ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Text(
+                                  post.userName,
+                                  style: const TextStyle(
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                if (post.userStatus.isNotEmpty) ...[
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '(${post.userStatus})',
+                                    style: const TextStyle(
+                                      color: AppColors.primary,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            Text(
+                              'Diposting ${_timeAgo(post.createdAt.toDate())}',
+                              style: const TextStyle(
+                                color: AppColors.textMuted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
                   ],
                 ),
               ),
+            ),
               const SizedBox(height: 24),
 
               // Contact button
@@ -1004,32 +1298,43 @@ class _HomeScreenState extends State<HomeScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 16,
-                              backgroundColor: AppColors.primary,
-                              backgroundImage: v.userPhotoUrl.isNotEmpty ? NetworkImage(v.userPhotoUrl) : null,
-                              child: v.userPhotoUrl.isEmpty ? const Icon(Icons.person, size: 16, color: Colors.white) : null,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(v.userName, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                                  Text(_timeAgo(v.createdAt.toDate()), style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
-                                ],
+                        GestureDetector(
+                          onTap: () => _showUserProfile(v.userId),
+                          child: Row(
+                            children: [
+                              CircleAvatar(
+                                radius: 16,
+                                backgroundColor: AppColors.primary,
+                                backgroundImage: v.userPhotoUrl.isNotEmpty ? NetworkImage(v.userPhotoUrl) : null,
+                                child: v.userPhotoUrl.isEmpty ? const Icon(Icons.person, size: 16, color: Colors.white) : null,
                               ),
-                            ),
-                            if (v.userId == FirebaseAuth.instance.currentUser?.uid)
-                              IconButton(
-                                icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.error),
-                                onPressed: () {
-                                  _postService.deleteVerification(post.id, v.id);
-                                },
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text(v.userName, style: const TextStyle(fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                                        if (v.userStatus.isNotEmpty) ...[
+                                          const SizedBox(width: 4),
+                                          Text('(${v.userStatus})', style: const TextStyle(color: AppColors.primary, fontSize: 11, fontWeight: FontWeight.w500)),
+                                        ],
+                                      ],
+                                    ),
+                                    Text(_timeAgo(v.createdAt.toDate()), style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                                  ],
+                                ),
                               ),
-                          ],
+                              if (v.userId == FirebaseAuth.instance.currentUser?.uid)
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline, size: 18, color: AppColors.error),
+                                  onPressed: () {
+                                    _postService.deleteVerification(post.id, v.id);
+                                  },
+                                ),
+                            ],
+                          ),
                         ),
                         const SizedBox(height: 12),
                         Text(v.teks, style: const TextStyle(color: AppColors.textSecondary, fontSize: 14)),
@@ -1198,7 +1503,7 @@ class _HomeScreenState extends State<HomeScreen>
         SliverPadding(
           padding: const EdgeInsets.all(16),
           sliver: StreamBuilder<QuerySnapshot>(
-            stream: _postService.getNotificationsStream(),
+            stream: _notificationsStream,
             builder: (context, snapshot) {
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                 return SliverFillRemaining(
@@ -1280,9 +1585,17 @@ class _HomeScreenState extends State<HomeScreen>
                                 ),
                               )
                             : null,
-                        onTap: () {
+                        onTap: () async {
                           if (!isRead) {
                             _postService.markNotificationRead(doc.id);
+                          }
+                          // Navigate to the post
+                          final postId = data['postId'] as String?;
+                          if (postId != null) {
+                            final post = await _postService.getPostById(postId);
+                            if (post != null && mounted) {
+                              _showPostDetail(post);
+                            }
                           }
                         },
                       ),
@@ -1386,7 +1699,7 @@ class _HomeScreenState extends State<HomeScreen>
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           sliver: StreamBuilder<QuerySnapshot>(
-            stream: _postService.getMyPostsStream(),
+            stream: _myPostsStream,
             builder: (context, snapshot) {
               if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                 return SliverToBoxAdapter(
@@ -1414,6 +1727,7 @@ class _HomeScreenState extends State<HomeScreen>
                         PostModel.fromFirestore(snapshot.data!.docs[index]);
                     return _MyPostCard(
                       post: post,
+                      onTap: () => _showPostDetail(post),
                       onMarkDone: () {
                         _postService.updatePostStatus(post.id, 'SELESAI');
                       },
@@ -1842,35 +2156,49 @@ class _PostCard extends StatelessWidget {
                   const SizedBox(height: 12),
 
                   // Author row
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 14,
-                        backgroundColor: AppColors.primary,
-                        backgroundImage: post.userPhotoUrl.isNotEmpty
-                            ? NetworkImage(post.userPhotoUrl)
-                            : null,
-                        child: post.userPhotoUrl.isEmpty
-                            ? Text(
-                                post.userName.isNotEmpty
-                                    ? post.userName[0].toUpperCase()
-                                    : '?',
-                                style: const TextStyle(
-                                    color: AppColors.white,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700))
-                            : null,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        post.userName,
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                  GestureDetector(
+                    onTap: () => context.findAncestorStateOfType<_HomeScreenState>()?._showUserProfile(post.userId),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 14,
+                          backgroundColor: AppColors.primary,
+                          backgroundImage: post.userPhotoUrl.isNotEmpty
+                              ? NetworkImage(post.userPhotoUrl)
+                              : null,
+                          child: post.userPhotoUrl.isEmpty
+                              ? Text(
+                                  post.userName.isNotEmpty
+                                      ? post.userName[0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                      color: AppColors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700))
+                              : null,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        Text(
+                          post.userName,
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (post.userStatus.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          Text(
+                            '(${post.userStatus})',
+                            style: const TextStyle(
+                              color: AppColors.primary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -1974,11 +2302,13 @@ class _MyPostCard extends StatelessWidget {
   final PostModel post;
   final VoidCallback onMarkDone;
   final VoidCallback onDelete;
+  final VoidCallback onTap;
 
   const _MyPostCard({
     required this.post,
     required this.onMarkDone,
     required this.onDelete,
+    required this.onTap,
   });
 
   @override
@@ -1991,6 +2321,7 @@ class _MyPostCard extends StatelessWidget {
         border: Border.all(color: AppColors.divider, width: 0.5),
       ),
       child: ListTile(
+        onTap: onTap,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: Container(
