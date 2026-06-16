@@ -1524,10 +1524,22 @@ class _HomeScreenState extends State<HomeScreen>
                 );
               }
 
+              final docs = snapshot.data!.docs.toList();
+              docs.sort((a, b) {
+                final aData = a.data() as Map<String, dynamic>;
+                final bData = b.data() as Map<String, dynamic>;
+                final aTime = aData['createdAt'] as Timestamp?;
+                final bTime = bData['createdAt'] as Timestamp?;
+                if (aTime == null && bTime == null) return 0;
+                if (aTime == null) return 1;
+                if (bTime == null) return -1;
+                return bTime.compareTo(aTime);
+              });
+
               return SliverList(
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
-                    final doc = snapshot.data!.docs[index];
+                    final doc = docs[index];
                     final data = doc.data() as Map<String, dynamic>;
                     final isRead = data['read'] ?? false;
 
@@ -1601,7 +1613,7 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     );
                   },
-                  childCount: snapshot.data!.docs.length,
+                  childCount: docs.length,
                 ),
               );
             },

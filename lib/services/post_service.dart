@@ -228,7 +228,6 @@ class PostService {
     return _firestore
         .collection('notifications')
         .where('userId', isEqualTo: uid)
-        .orderBy('createdAt', descending: true)
         .snapshots();
   }
 
